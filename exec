@@ -83,7 +83,7 @@ if [[ $@ == *"help"* ]]; then
     printf "Boxes\t\thttp://boxes.thomasjensen.com\n"
     echo
     echo "Author:"
-    printf "Ivan R.\t\tMS-7187 | 81N4\n"
+    printf "Ivan\t\tMS-7187 | 81N4\n"
     echo
     echo "Contributors:"
     printf "Group L\t\tDidit | Andhika\n") \
