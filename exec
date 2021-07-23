@@ -1,0 +1,174 @@
+#!/bin/bash
+
+# cleans leftover
+[[ -e "temp" ]] && rm "temp"
+
+# get dir and move work dir
+BASEDIR=$(dirname $0)
+cd ${PWD}/${BASEDIR}/
+
+# checks prerequisite
+programs=("sqlite3" "boxes" "time")
+for i in "${programs[@]}"; do
+    if ! command -v $i &> /dev/null; then
+        echo "Please install "$i" to proceed"
+        exit
+    fi
+
+done
+
+if [[ ! -e "data.sql" ]] || [[ ! -e "schema-index.sql" ]] || [[ ! -e "schema-no_index.sql" ]]; then
+    echo ".sql not found!"
+    exit
+fi
+
+# performs complete test suite in background
+if [[ $@ == *"silent"* ]]; then
+    ./exec help init query stats dry > ../README
+    exit
+fi
+
+# sqlite databases
+if [[ $@ == *"no_index"* ]]; then
+    database=("no_index")
+elif [[ $@ == *"index"* ]]; then
+    database=("index")
+else
+    database=("no_index" "index")
+fi
+
+# database stats
+db_records=$(($(cat ./data.sql | wc -l) - 3))
+
+tables=("-- LIST OF TABLES")
+tables+=("SELECT * FROM SECTIONS")
+tables+=("SELECT * FROM INSTRUCTORS")
+tables+=("SELECT * FROM COURSE_OFFERINGS")
+tables+=("SELECT * FROM SUBJECT_MEMBERSHIPS")
+tables+=("SELECT * FROM COURSES")
+tables+=("SELECT * FROM ROOMS")
+tables+=("SELECT * FROM TEACHINGS")
+tables+=("SELECT * FROM SUBJECTS")
+tables+=("SELECT * FROM SCHEDULES")
+tables+=("SELECT * FROM GRADE_DISTRIBUTIONS")
+
+# generates sql script
+timer=".timer on"
+commands=("-- LIST OF COMMANDS")
+commands+=("SELECT SECTION_TYPE, COUNT(NUMBER) FROM SECTIONS WHERE SECTION_TYPE='LAB' OR SECTION_TYPE='LEC' OR SECTION_TYPE='SEM' GROUP BY SECTION_TYPE") # Query1/6
+commands+=("SELECT CO.NAME, COUNT(GD.F_COUNT) FROM COURSE_OFFERINGS CO, GRADE_DISTRIBUTIONS GD WHERE CO.UUID=GD.COURSE_OFFERING_UUID AND CO.TERM_CODE > 1100 AND GD.F_COUNT > 10 GROUP BY CO.NAME") # Query2/7
+commands+=("SELECT INS.NAME, COUNT(SE.SECTION_TYPE) FROM INSTRUCTORS INS, SECTIONS SE, TEACHINGS TE WHERE INS.ID=TE.INSTRUCTOR_ID AND SE.UUID=TE.SECTION_UUID AND SE.SECTION_TYPE='LEC' AND INS.NAME LIKE '%ANNA%' GROUP BY INS.NAME") # Query3/8
+commands+=("SELECT SU.CODE, SU.ABBREVIATION, CO.TERM_CODE, CO.NAME FROM SUBJECTS SU, SUBJECT_MEMBERSHIPS SM, COURSE_OFFERINGS CO WHERE SU.CODE=SM.SUBJECT_CODE AND SM.COURSE_OFFERING_UUID=CO.UUID AND SU.CODE LIKE '%0%' AND CO.TERM_CODE LIKE '%4'") # Query4/9
+commands+=("SELECT INS.ID, INS.NAME, RO.FACILITY_CODE, RO.ROOM_CODE, SE.SECTION_TYPE FROM INSTRUCTORS INS, ROOMS RO, TEACHINGS TE, SECTIONS SE WHERE INS.ID=TE.INSTRUCTOR_ID AND TE.SECTION_UUID=SE.UUID AND SE.ROOM_UUID=RO.UUID AND INS.ID LIKE '%13%' AND RO.ROOM_CODE LIKE '%0%' AND SE.SECTION_TYPE LIKE '%L%'") # Query5/10
+
+# quick manual
+if [[ $@ == *"help"* ]]; then
+    (echo "THE QUICK & RELIABLE OVERVIEW OF"
+    echo "SQLITE3 INDEXING PERFORMANCE ANALYSES"
+    (echo "Usage: exec [arg1, arg2, ...] [no_index | index]"
+    echo "If no args specified, runs the complete test suite"
+    echo "Specify .db with no_index or index, leave empty for both"
+    echo
+    echo "Available arguments:"
+    printf "clean\t\tSafely removes executables, must be the first arg\n"
+    printf "init\t\tCreates databases by overwrite, run before everything but clean\n"
+    printf "query\t\tRuns the 5 queries(no_index and/or index), run after init\n"
+    printf "stats\t\tShows statistics overview, run after init\n"
+    printf "dry\t\tRemoves executables on exit, must be the last arg\n"
+    printf "silent\t\tRuns complete test suite in background, must be the only arg\n"
+    printf "help\t\tShows quick manual\n"
+    echo
+    echo "Acknowledgements:"
+    printf "UW Madison\thttps://madgrades.com/\n"
+    printf "Boxes\t\thttp://boxes.thomasjensen.com\n"
+    echo
+    echo "Author:"
+    printf "Ivan R.\t\tMS-7187 | 81N4\n"
+    echo
+    echo "Contributors:"
+    printf "Group L\t\tDidit | Andhika\n") \
+    | boxes -d parchment -p a2) | boxes -a c -d spring -p a2 -s 128
+fi
+
+# clean should be the only arg if used
+# otherwise exit
+if [[ $@ == *"clean"* ]]; then
+    for i in "${database[@]}"; do [[ -e $i".db" ]] && rm $i".db"; done
+    exit
+fi
+
+# create databases by overwrite
+if [[ $@ == *"init"* ]]; then
+    for i in "${database[@]}"; do [[ -e $i".db" ]] && rm $i".db"; done
+
+    for i in "${database[@]}"; do 
+        (echo "CREATING SCHEMA | ./$i.db | 10 TABLES" && \
+        time (sqlite3 ./$i.db < ./schema-$i.sql)) \
+        |& boxes -a c -d stone -s 128 \
+        && echo
+
+        (echo "INSERTING DATA | ./$i.db | $db_records RECORDS" && \
+        time (sqlite3 ./$i.db < ./data.sql)) \
+        |& boxes -a c -d stone -s 128 \
+        && echo
+    done
+fi
+
+# runs query tasks with timer
+if [[ $@ == *"query"* ]]; then
+    # checks .db exists
+    for i in "${database[@]}"; do
+        if [[ ! -e $i".db" ]]; then
+            echo "databases not found, run init first!"
+            exit
+        fi
+    done
+
+    for n in {1..5}; do
+        [[ -e "temp" ]] && rm "temp"
+
+        echo $timer > temp
+        echo ".mode markdown" >> temp
+        printf "%s\n" "${commands[$n]}" >> temp
+
+        for i in "${database[@]}"; do
+            (printf "QUERY #$n | ./$i.db | "$(sqlite3 ./no_index.db "${commands[$n]}" | wc -l)" RECORDS\n" && \
+            (sqlite3 ./$i.db < temp | tail -n 4)) \
+            |& boxes -a c -d stone -s 128 \
+            && echo
+        done
+    done
+fi
+
+# shows database quick overview
+if [[ $@ == *"stats"* ]]; then
+    # checks .db exists
+    for i in "${database[@]}"; do
+        if [[ ! -e $i".db" ]]; then
+            echo "databases not found, run init first!"
+            exit
+        fi
+    done
+
+    (echo "DATABASE STATISTICS"
+    (echo "The UW Madison Courses and Grades 2006-2017"
+    printf "10 TABLES | $db_records RECORDS\n"
+    for n in {1..10}; do
+        echo
+        printf "${tables[$n]}\n"$(sqlite3 ./index.db "${tables[$n]}" | wc -l)" RECORDS\n"
+    done) \
+    | boxes -a c -d parchment -p a2 -s 87) | boxes -a c -d spring -p a2 -s 128
+fi
+
+# dry should be the last arg if used
+if [[ $@ == *"dry"* ]]; then
+    for i in "${database[@]}"; do [[ -e $i".db" ]] && rm $i".db"; done
+fi
+
+[[ -e "temp" ]] && rm "temp"
+
+# if nothing's specified, performs complete test suite
+if [[ $@ == "" ]]; then
+    ./exec help init query stats dry
+    exit
+fi
